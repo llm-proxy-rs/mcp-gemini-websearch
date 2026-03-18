@@ -205,5 +205,13 @@ async def web_search(query: str) -> str:
 # ── Entrypoint ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    from starlette.responses import PlainTextResponse
+    from starlette.routing import Route
+    import uvicorn
+
     log.info("Starting Gemini Web Search MCP server (streamable-http)")
-    mcp.run(transport="streamable-http", host=MCP_HOST, port=MCP_PORT)
+
+    app = mcp.http_app(transport="streamable-http")
+    app.routes.append(Route("/health", lambda _: PlainTextResponse("ok")))
+
+    uvicorn.run(app, host=MCP_HOST, port=MCP_PORT)

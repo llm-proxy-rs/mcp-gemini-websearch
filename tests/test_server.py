@@ -4,6 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from starlette.routing import Route
+from starlette.testclient import TestClient
 
 from server import _format_response, mcp, web_search
 
@@ -164,3 +166,20 @@ class TestMCPIntegration:
             result = await mcp.call_tool("web_search", {"query": "test"})
 
         assert result.content[0].text == "mcp result"
+
+
+# ---------------------------------------------------------------------------
+# 4. Health endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestHealth:
+    def test_health_returns_ok(self):
+        from starlette.responses import PlainTextResponse
+
+        app = mcp.http_app(transport="streamable-http")
+        app.routes.append(Route("/health", lambda _: PlainTextResponse("ok")))
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        assert resp.text == "ok"
