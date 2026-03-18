@@ -182,6 +182,39 @@ class TestSanitizeUrl:
             assert result == ""
 
     @pytest.mark.asyncio
+    async def test_url_with_spaces_is_encoded(self):
+        result = await _sanitize_url(
+            "https://www.example.com/search?q=best+python tips+and tricks"
+        )
+        assert (
+            result == "https://www.example.com/search?q=best+python%20tips+and%20tricks"
+        )
+
+    @pytest.mark.asyncio
+    async def test_vertexai_non_redirect_path_passes_through(self):
+        url = "https://vertexaisearch.cloud.google.com/other-path"
+        result = await _sanitize_url(url)
+        assert result == url
+
+    @pytest.mark.asyncio
+    async def test_vertexai_redirect_encodes_resolved_url(self):
+        redirect_url = (
+            "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc"
+        )
+        mock_resp = SimpleNamespace(
+            headers={"location": "https://example.com/path with spaces"}
+        )
+        with patch("server.httpx.AsyncClient") as mock_cls:
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
+            mock_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_ctx.head = AsyncMock(return_value=mock_resp)
+            mock_cls.return_value = mock_ctx
+
+            result = await _sanitize_url(redirect_url)
+            assert result == "https://example.com/path%20with%20spaces"
+
+    @pytest.mark.asyncio
     async def test_empty_url_passes_through(self):
         assert await _sanitize_url("") == ""
 

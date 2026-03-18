@@ -3,7 +3,6 @@
 import json
 import logging
 import os
-from urllib.parse import urlparse
 
 import httpx
 
@@ -133,19 +132,20 @@ async def _sanitize_url(url: str) -> str:
     Only follows a single redirect from Google's own domain — does NOT
     connect to the destination. Returns the original URL on failure.
     """
-    parsed = urlparse(url)
-    if not parsed.hostname or "vertexaisearch" not in parsed.hostname:
-        return url
+    parsed = httpx.URL(url)
+    if parsed.host != "vertexaisearch.cloud.google.com" or not parsed.path.startswith(
+        "/grounding-api-redirect"
+    ):
+        return str(parsed)
     try:
         async with httpx.AsyncClient(follow_redirects=False, timeout=5) as client:
             resp = await client.head(url)
         location = resp.headers.get("location", "")
         if not location:
             return ""
-        # Only accept public http(s) URLs.
-        rp = urlparse(location)
-        if rp.scheme in ("http", "https") and rp.hostname:
-            return location
+        resolved = httpx.URL(location)
+        if resolved.scheme in ("http", "https") and resolved.host:
+            return str(resolved)
         return ""
     except Exception:
         log.debug("Failed to resolve redirect for URL")
