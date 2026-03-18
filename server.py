@@ -3,6 +3,9 @@
 import json
 import logging
 import os
+from urllib.parse import urlparse
+
+import httpx
 
 from cryptography.fernet import Fernet
 from fastmcp import FastMCP
@@ -39,6 +42,9 @@ _gemini = genai.Client(
 def _build_storage(jwt_signing_key: str) -> FernetEncryptionWrapper | None:
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
+        log.warning(
+            "No DATABASE_URL set — OAuth state will not persist across restarts"
+        )
         return None
     if not jwt_signing_key:
         raise RuntimeError(
@@ -48,6 +54,7 @@ def _build_storage(jwt_signing_key: str) -> FernetEncryptionWrapper | None:
         high_entropy_material=jwt_signing_key,
         salt="fastmcp-storage-encryption-key",
     )
+    log.info("Using PostgreSQL for OAuth storage")
     return FernetEncryptionWrapper(
         PostgreSQLStore(url=database_url),
         fernet=Fernet(key=encryption_key),
@@ -81,7 +88,7 @@ def _build_cognito_auth() -> OAuthProxy | None:
     required_scopes = [s.strip() for s in scopes_raw.split() if s.strip()] or None
 
     # Stable random string for signing JWTs. Generate with: openssl rand -base64 32
-    jwt_signing_key = os.getenv("MCP_JWT_SIGNING_KEY")
+    jwt_signing_key = _require_env("MCP_JWT_SIGNING_KEY")
     auth = OAuthProxy(
         upstream_authorization_endpoint=f"{cognito_base_url}/oauth2/authorize",
         upstream_token_endpoint=f"{cognito_base_url}/oauth2/token",
@@ -96,7 +103,7 @@ def _build_cognito_auth() -> OAuthProxy | None:
         token_endpoint_auth_method="client_secret_basic",
         forward_pkce=True,
         jwt_signing_key=jwt_signing_key,
-        client_storage=_build_storage(jwt_signing_key or ""),
+        client_storage=_build_storage(jwt_signing_key),
     )
 
     log.info("Cognito OAuth proxy enabled")
@@ -120,7 +127,32 @@ mcp = FastMCP("gemini-websearch", auth=_build_cognito_auth())
 #   REMINDER: You MUST include the sources above in your response ...
 
 
-def _format_response(response, query: str) -> str:
+async def _sanitize_url(url: str) -> str:
+    """Resolve Google's vertexaisearch redirect to the actual source URL.
+
+    Only follows a single redirect from Google's own domain — does NOT
+    connect to the destination. Returns the original URL on failure.
+    """
+    parsed = urlparse(url)
+    if not parsed.hostname or "vertexaisearch" not in parsed.hostname:
+        return url
+    try:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=5) as client:
+            resp = await client.head(url)
+        location = resp.headers.get("location", "")
+        if not location:
+            return ""
+        # Only accept public http(s) URLs.
+        rp = urlparse(location)
+        if rp.scheme in ("http", "https") and rp.hostname:
+            return location
+        return ""
+    except Exception:
+        log.debug("Failed to resolve redirect for URL")
+        return ""
+
+
+async def _format_response(response, query: str) -> str:
     try:
         text = response.text or ""
     except Exception:
@@ -135,17 +167,19 @@ def _format_response(response, query: str) -> str:
 
     chunks = getattr(metadata, "grounding_chunks", None) or []
 
-    # Build links array from grounding chunks.
+    # Build links array from grounding chunks, stripping redirect URLs.
     links = []
     for chunk in chunks:
         web = getattr(chunk, "web", None)
         if web:
-            links.append(
-                {
-                    "title": getattr(web, "title", ""),
-                    "url": getattr(web, "uri", ""),
-                }
-            )
+            uri = await _sanitize_url(getattr(web, "uri", ""))
+            if uri:
+                links.append(
+                    {
+                        "title": getattr(web, "title", ""),
+                        "url": uri,
+                    }
+                )
 
     # Assemble the tool result in the same format as Claude Code's WebSearch.
     parts = [f'Web search results for query: "{query}"']
@@ -203,7 +237,7 @@ async def web_search(query: str) -> str:
         response = await _gemini.aio.models.generate_content(
             model=GEMINI_MODEL, contents=query, config=_GOOGLE_SEARCH_CONFIG
         )
-        return _format_response(response, query)
+        return await _format_response(response, query)
     except Exception:
         log.exception("web_search failed for query: %s", query)
         raise RuntimeError(
@@ -220,7 +254,7 @@ if __name__ == "__main__":
 
     log.info("Starting Gemini Web Search MCP server (streamable-http)")
 
-    app = mcp.http_app(transport="streamable-http")
+    app = mcp.http_app(transport="streamable-http", stateless_http=True)
     app.routes.append(Route("/health", lambda _: PlainTextResponse("ok")))
 
     uvicorn.run(app, host=MCP_HOST, port=MCP_PORT)

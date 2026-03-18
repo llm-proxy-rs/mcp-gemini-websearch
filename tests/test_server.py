@@ -7,7 +7,7 @@ import pytest
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from server import _format_response, mcp, web_search
+from server import _format_response, _sanitize_url, mcp, web_search
 
 # ---------------------------------------------------------------------------
 # Helpers to build mock Gemini response objects
@@ -28,33 +28,46 @@ def _make_response(
     return SimpleNamespace(text=text, candidates=[candidate])
 
 
+# Patch _sanitize_url to passthrough in tests (no real HTTP calls).
+async def _passthrough_sanitize(url):
+    return url
+
+
+_noop_sanitize = patch("server._sanitize_url", side_effect=_passthrough_sanitize)
+
+
 # ---------------------------------------------------------------------------
 # 1. _format_response  (pure logic)
 # ---------------------------------------------------------------------------
 
 
 class TestFormatResponse:
-    def test_text_only_no_metadata(self):
+    @pytest.mark.asyncio
+    async def test_text_only_no_metadata(self):
         resp = _make_response("Hello world")
-        assert _format_response(resp, "test") == "Hello world"
+        assert await _format_response(resp, "test") == "Hello world"
 
-    def test_text_only_metadata_none(self):
+    @pytest.mark.asyncio
+    async def test_text_only_metadata_none(self):
         resp = _make_response("Hello", metadata=None)
-        assert _format_response(resp, "test") == "Hello"
+        assert await _format_response(resp, "test") == "Hello"
 
-    def test_no_grounding_just_text(self):
+    @pytest.mark.asyncio
+    async def test_no_grounding_just_text(self):
         metadata = SimpleNamespace(
             web_search_queries=["q1", "q2"],
             grounding_chunks=None,
             grounding_supports=None,
         )
         resp = _make_response("answer", metadata=metadata)
-        result = _format_response(resp, "test")
+        result = await _format_response(resp, "test")
         assert "answer" in result
         assert "No links found." in result
         assert "REMINDER:" in result
 
-    def test_links_and_reminder_included(self):
+    @pytest.mark.asyncio
+    @_noop_sanitize
+    async def test_links_and_reminder_included(self, _mock):
         chunks = [
             _make_chunk("Site A", "https://a.com"),
             _make_chunk("Site B", "https://b.com"),
@@ -65,7 +78,7 @@ class TestFormatResponse:
             grounding_supports=None,
         )
         resp = _make_response("info", metadata=metadata)
-        result = _format_response(resp, "my query")
+        result = await _format_response(resp, "my query")
         assert result.startswith('Web search results for query: "my query"')
         assert '"title": "Site A"' in result
         assert '"url": "https://a.com"' in result
@@ -73,21 +86,25 @@ class TestFormatResponse:
         assert "info" in result
         assert "REMINDER:" in result
 
-    def test_empty_candidates(self):
+    @pytest.mark.asyncio
+    async def test_empty_candidates(self):
         resp = SimpleNamespace(text="Hello", candidates=[])
-        assert _format_response(resp, "test") == "Hello"
+        assert await _format_response(resp, "test") == "Hello"
 
-    def test_no_links_says_no_links(self):
+    @pytest.mark.asyncio
+    async def test_no_links_says_no_links(self):
         metadata = SimpleNamespace(
             web_search_queries=None,
             grounding_chunks=[],
             grounding_supports=None,
         )
         resp = _make_response("answer", metadata=metadata)
-        result = _format_response(resp, "test")
+        result = await _format_response(resp, "test")
         assert "No links found." in result
 
-    def test_query_appears_in_envelope(self):
+    @pytest.mark.asyncio
+    @_noop_sanitize
+    async def test_query_appears_in_envelope(self, _mock):
         chunks = [_make_chunk("X", "https://x.com")]
         metadata = SimpleNamespace(
             web_search_queries=None,
@@ -95,12 +112,82 @@ class TestFormatResponse:
             grounding_supports=None,
         )
         resp = _make_response("text", metadata=metadata)
-        result = _format_response(resp, "kubernetes gateway api")
+        result = await _format_response(resp, "kubernetes gateway api")
         assert 'Web search results for query: "kubernetes gateway api"' in result
 
 
 # ---------------------------------------------------------------------------
-# 2. web_search tool
+# 2. _sanitize_url
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizeUrl:
+    @pytest.mark.asyncio
+    async def test_normal_url_passes_through(self):
+        assert (
+            await _sanitize_url("https://example.com/page")
+            == "https://example.com/page"
+        )
+
+    @pytest.mark.asyncio
+    async def test_vertexai_redirect_is_resolved(self):
+        redirect_url = (
+            "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc123"
+        )
+
+        mock_resp = SimpleNamespace(
+            headers={"location": "https://www.example.com/article"}
+        )
+        with patch("server.httpx.AsyncClient") as mock_cls:
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
+            mock_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_ctx.head = AsyncMock(return_value=mock_resp)
+            mock_cls.return_value = mock_ctx
+
+            result = await _sanitize_url(redirect_url)
+            assert result == "https://www.example.com/article"
+
+    @pytest.mark.asyncio
+    async def test_vertexai_redirect_blocks_non_http(self):
+        redirect_url = (
+            "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc123"
+        )
+
+        mock_resp = SimpleNamespace(headers={"location": "file:///etc/passwd"})
+        with patch("server.httpx.AsyncClient") as mock_cls:
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
+            mock_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_ctx.head = AsyncMock(return_value=mock_resp)
+            mock_cls.return_value = mock_ctx
+
+            result = await _sanitize_url(redirect_url)
+            assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_vertexai_redirect_failure_returns_empty(self):
+        redirect_url = (
+            "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc123"
+        )
+
+        with patch("server.httpx.AsyncClient") as mock_cls:
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
+            mock_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_ctx.head = AsyncMock(side_effect=Exception("timeout"))
+            mock_cls.return_value = mock_ctx
+
+            result = await _sanitize_url(redirect_url)
+            assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_empty_url_passes_through(self):
+        assert await _sanitize_url("") == ""
+
+
+# ---------------------------------------------------------------------------
+# 3. web_search tool
 # ---------------------------------------------------------------------------
 
 
@@ -134,7 +221,8 @@ class TestWebSearch:
                 await web_search("test query")
 
     @pytest.mark.asyncio
-    async def test_returns_envelope_with_links(self):
+    @_noop_sanitize
+    async def test_returns_envelope_with_links(self, _mock):
         chunks = [_make_chunk("Example", "https://example.com")]
         metadata = SimpleNamespace(
             web_search_queries=["test"],
@@ -156,7 +244,7 @@ class TestWebSearch:
 
 
 # ---------------------------------------------------------------------------
-# 3. MCP server integration
+# 4. MCP server integration
 # ---------------------------------------------------------------------------
 
 
@@ -181,7 +269,7 @@ class TestMCPIntegration:
 
 
 # ---------------------------------------------------------------------------
-# 4. Health endpoint
+# 5. Health endpoint
 # ---------------------------------------------------------------------------
 
 

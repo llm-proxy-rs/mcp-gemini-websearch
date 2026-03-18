@@ -18,6 +18,7 @@ _COGNITO_FULL_ENV = {
     "COGNITO_CLIENT_ID": "client-id",
     "COGNITO_CLIENT_SECRET": "secret",
     "COGNITO_DOMAIN": "test",
+    "MCP_JWT_SIGNING_KEY": "test-signing-key-at-least-12-chars",
 }
 
 
@@ -74,6 +75,12 @@ def test_auth_requires_domain():
     """Missing COGNITO_DOMAIN should raise RuntimeError."""
     with pytest.raises(RuntimeError, match="COGNITO_DOMAIN"):
         _build_auth_missing("COGNITO_DOMAIN")
+
+
+def test_auth_requires_jwt_signing_key():
+    """Missing MCP_JWT_SIGNING_KEY should raise RuntimeError."""
+    with pytest.raises(RuntimeError, match="MCP_JWT_SIGNING_KEY"):
+        _build_auth_missing("MCP_JWT_SIGNING_KEY")
 
 
 def test_auth_configured_with_all_vars():
