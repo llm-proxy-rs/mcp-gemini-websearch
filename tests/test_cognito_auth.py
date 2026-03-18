@@ -1,11 +1,12 @@
 """Tests for Cognito OAuth configuration via OAuthProxy + JWTVerifier."""
 
 import os
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import pytest
 from fastmcp.server.auth import OAuthProxy
 from fastmcp.server.auth.providers.jwt import JWTVerifier, RSAKeyPair
+from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
 
 import server
 
@@ -79,6 +80,47 @@ def test_auth_configured_with_all_vars():
     """With all required vars set, should return an OAuthProxy instance."""
     result = _build_auth()
     assert isinstance(result, OAuthProxy)
+
+
+# --- _build_storage tests ---
+
+
+def test_build_storage_returns_none_without_database_url():
+    """When DATABASE_URL is not set, _build_storage returns None."""
+    with patch.dict(os.environ, {"DATABASE_URL": ""}, clear=False):
+        result = server._build_storage("some-signing-key")
+    assert result is None
+
+
+def test_build_storage_raises_without_signing_key():
+    """When DATABASE_URL is set but jwt_signing_key is empty, should raise."""
+    with patch.dict(
+        os.environ, {"DATABASE_URL": "postgresql://localhost/test"}, clear=False
+    ):
+        with pytest.raises(RuntimeError, match="MCP_JWT_SIGNING_KEY"):
+            server._build_storage("")
+
+
+@patch("server.PostgreSQLStore")
+def test_build_storage_returns_fernet_wrapper(mock_pg_store):
+    """When DATABASE_URL and signing key are set, should return FernetEncryptionWrapper."""
+    mock_pg_store.return_value = MagicMock()
+    with patch.dict(
+        os.environ, {"DATABASE_URL": "postgresql://localhost/test"}, clear=False
+    ):
+        result = server._build_storage("a-valid-signing-key-for-testing-1234")
+    assert isinstance(result, FernetEncryptionWrapper)
+    mock_pg_store.assert_called_once()
+
+
+@patch("server.PostgreSQLStore")
+def test_build_storage_passes_database_url_to_pg_store(mock_pg_store):
+    """PostgreSQLStore should be created with the DATABASE_URL."""
+    mock_pg_store.return_value = MagicMock()
+    db_url = "postgresql://user:pass@db.example.com:5432/mydb"
+    with patch.dict(os.environ, {"DATABASE_URL": db_url}, clear=False):
+        server._build_storage("a-valid-signing-key-for-testing-1234")
+    mock_pg_store.assert_called_once_with(url=db_url)
 
 
 # --- JWTVerifier token validation tests ---

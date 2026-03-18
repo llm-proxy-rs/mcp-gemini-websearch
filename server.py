@@ -49,7 +49,7 @@ def _build_storage(jwt_signing_key: str) -> FernetEncryptionWrapper | None:
         salt="fastmcp-storage-encryption-key",
     )
     return FernetEncryptionWrapper(
-        store=PostgreSQLStore(url=database_url),
+        PostgreSQLStore(url=database_url),
         fernet=Fernet(key=encryption_key),
     )
 
