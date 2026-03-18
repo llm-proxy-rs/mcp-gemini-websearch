@@ -122,6 +122,18 @@ class TestWebSearch:
         assert call_kwargs.kwargs["contents"] == "test query"
 
     @pytest.mark.asyncio
+    async def test_api_error_returns_generic_message(self):
+        with patch("server._gemini") as mock_client:
+            mock_client.aio.models.generate_content = AsyncMock(
+                side_effect=Exception(
+                    "Failed to retrieve http://metadata.google.internal/... "
+                    "service-account@project.iam.gserviceaccount.com"
+                )
+            )
+            with pytest.raises(RuntimeError, match="temporarily unavailable"):
+                await web_search("test query")
+
+    @pytest.mark.asyncio
     async def test_returns_envelope_with_links(self):
         chunks = [_make_chunk("Example", "https://example.com")]
         metadata = SimpleNamespace(

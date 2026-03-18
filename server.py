@@ -99,12 +99,7 @@ def _build_cognito_auth() -> OAuthProxy | None:
         client_storage=_build_storage(jwt_signing_key or ""),
     )
 
-    log.info(
-        "Cognito OAuth proxy enabled: pool=%s region=%s domain=%s",
-        pool_id,
-        region,
-        domain,
-    )
+    log.info("Cognito OAuth proxy enabled")
     return auth
 
 
@@ -126,23 +121,31 @@ mcp = FastMCP("gemini-websearch", auth=_build_cognito_auth())
 
 
 def _format_response(response, query: str) -> str:
-    text = response.text or ""
+    try:
+        text = response.text or ""
+    except Exception:
+        text = ""
 
-    if not response.candidates:
+    if not getattr(response, "candidates", None):
         return text
 
-    metadata = response.candidates[0].grounding_metadata
+    metadata = getattr(response.candidates[0], "grounding_metadata", None)
     if not metadata:
         return text
 
-    chunks = metadata.grounding_chunks or []
+    chunks = getattr(metadata, "grounding_chunks", None) or []
 
     # Build links array from grounding chunks.
-    links = [
-        {"title": chunk.web.title, "url": chunk.web.uri}
-        for chunk in chunks
-        if chunk.web
-    ]
+    links = []
+    for chunk in chunks:
+        web = getattr(chunk, "web", None)
+        if web:
+            links.append(
+                {
+                    "title": getattr(web, "title", ""),
+                    "url": getattr(web, "uri", ""),
+                }
+            )
 
     # Assemble the tool result in the same format as Claude Code's WebSearch.
     parts = [f'Web search results for query: "{query}"']
@@ -196,10 +199,16 @@ async def web_search(query: str) -> str:
       - Today's date is 2025-12-06. You MUST use this year when searching for recent information, documentation, or current events.
       - Example: If today is 2025-07-15 and the user asks for "latest React docs", search for "React documentation 2025", NOT "React documentation 2024"
     """
-    response = await _gemini.aio.models.generate_content(
-        model=GEMINI_MODEL, contents=query, config=_GOOGLE_SEARCH_CONFIG
-    )
-    return _format_response(response, query)
+    try:
+        response = await _gemini.aio.models.generate_content(
+            model=GEMINI_MODEL, contents=query, config=_GOOGLE_SEARCH_CONFIG
+        )
+        return _format_response(response, query)
+    except Exception:
+        log.exception("web_search failed for query: %s", query)
+        raise RuntimeError(
+            "Web search is temporarily unavailable. Please try again later."
+        )
 
 
 # ── Entrypoint ───────────────────────────────────────────────────────────────
