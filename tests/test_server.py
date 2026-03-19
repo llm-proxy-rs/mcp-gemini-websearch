@@ -7,7 +7,7 @@ import pytest
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from server import _format_response, _sanitize_url, mcp, web_search
+from server import _format_response, _sanitize_url, health, mcp, web_search
 
 # ---------------------------------------------------------------------------
 # Helpers to build mock Gemini response objects
@@ -215,6 +215,23 @@ class TestSanitizeUrl:
             assert result == "https://example.com/path%20with%20spaces"
 
     @pytest.mark.asyncio
+    async def test_vertexai_redirect_no_location_header(self):
+        redirect_url = (
+            "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc123"
+        )
+
+        mock_resp = SimpleNamespace(headers={})
+        with patch("server.httpx.AsyncClient") as mock_cls:
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
+            mock_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_ctx.head = AsyncMock(return_value=mock_resp)
+            mock_cls.return_value = mock_ctx
+
+            result = await _sanitize_url(redirect_url)
+            assert result == ""
+
+    @pytest.mark.asyncio
     async def test_empty_url_passes_through(self):
         assert await _sanitize_url("") == ""
 
@@ -307,12 +324,51 @@ class TestMCPIntegration:
 
 
 class TestHealth:
-    def test_health_returns_ok(self):
-        from starlette.responses import PlainTextResponse
-
-        app = mcp.http_app(transport="streamable-http")
-        app.routes.append(Route("/health", lambda _: PlainTextResponse("ok")))
-        client = TestClient(app, raise_server_exceptions=False)
-        resp = client.get("/health")
+    def test_health_returns_ok_without_db(self):
+        """When no DB is configured, health returns plain 'ok'."""
+        with patch("server._oauth_storage", None):
+            app = mcp.http_app(transport="streamable-http")
+            app.routes.append(Route("/health", health))
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get("/health")
         assert resp.status_code == 200
         assert resp.text == "ok"
+
+    def test_health_returns_ok_with_db(self):
+        """When DB is configured and reachable, health returns JSON ok."""
+        mock_pool = AsyncMock()
+        mock_pool.fetchval = AsyncMock(return_value=1)
+
+        mock_store = AsyncMock()
+        mock_store._pool = mock_pool
+
+        mock_storage = AsyncMock()
+        mock_storage.key_value = mock_store
+
+        with patch("server._oauth_storage", mock_storage):
+            app = mcp.http_app(transport="streamable-http")
+            app.routes.append(Route("/health", health))
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get("/health")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok", "db": "ok"}
+        mock_store.setup.assert_awaited_once()
+        mock_pool.fetchval.assert_awaited_once_with("SELECT 1")
+
+    def test_health_returns_503_when_db_unreachable(self):
+        """When DB is configured but unreachable, health returns 503."""
+        mock_store = AsyncMock()
+        mock_store.setup.side_effect = ConnectionError("connection refused")
+
+        mock_storage = AsyncMock()
+        mock_storage.key_value = mock_store
+
+        with patch("server._oauth_storage", mock_storage):
+            app = mcp.http_app(transport="streamable-http")
+            app.routes.append(Route("/health", health))
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get("/health")
+
+        assert resp.status_code == 503
+        assert resp.json() == {"status": "degraded", "db": "unreachable"}

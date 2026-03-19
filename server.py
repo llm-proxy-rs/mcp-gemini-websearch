@@ -7,6 +7,8 @@ import os
 import httpx
 
 from cryptography.fernet import Fernet
+from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.routing import Route
 from fastmcp import FastMCP
 from fastmcp.server.auth import OAuthProxy
 from fastmcp.server.auth.jwt_issuer import derive_jwt_key
@@ -22,7 +24,7 @@ log = logging.getLogger(__name__)
 MCP_HOST = os.getenv("MCP_HOST", "0.0.0.0")
 MCP_PORT = int(os.getenv("MCP_PORT", "8080"))
 MCP_BASE_URL = os.getenv("MCP_BASE_URL", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
 if not GOOGLE_CLOUD_PROJECT:
@@ -49,19 +51,26 @@ def _build_storage(jwt_signing_key: str) -> FernetEncryptionWrapper | None:
         raise RuntimeError(
             "MCP_JWT_SIGNING_KEY must be set when DATABASE_URL is configured"
         )
+    storage_encryption_salt = os.getenv("STORAGE_ENCRYPTION_SALT")
+    if not storage_encryption_salt:
+        raise RuntimeError(
+            "STORAGE_ENCRYPTION_SALT must be set when DATABASE_URL is configured"
+        )
     encryption_key = derive_jwt_key(
         high_entropy_material=jwt_signing_key,
-        salt="fastmcp-storage-encryption-key",
+        salt=storage_encryption_salt,
     )
     log.info("Using PostgreSQL for OAuth storage")
-    return FernetEncryptionWrapper(
+    global _oauth_storage
+    _oauth_storage = FernetEncryptionWrapper(
         PostgreSQLStore(url=database_url),
         fernet=Fernet(key=encryption_key),
     )
+    return _oauth_storage
 
 
 def _require_env(name: str) -> str:
-    value = os.getenv(name, "")
+    value = os.getenv(name)
     if not value:
         raise RuntimeError(
             f"{name} must be set when COGNITO_USER_POOL_ID is configured"
@@ -83,8 +92,8 @@ def _build_cognito_auth() -> OAuthProxy | None:
     cognito_base_url = f"https://{domain}.auth.{region}.amazoncognito.com"
     issuer_url = f"https://cognito-idp.{region}.amazonaws.com/{pool_id}"
 
-    scopes_raw = os.getenv("COGNITO_SCOPES", "")
-    required_scopes = [s.strip() for s in scopes_raw.split() if s.strip()] or None
+    scopes_raw = _require_env("COGNITO_SCOPES")
+    required_scopes = [s.strip() for s in scopes_raw.split() if s.strip()]
 
     # Stable random string for signing JWTs. Generate with: openssl rand -base64 32
     jwt_signing_key = _require_env("MCP_JWT_SIGNING_KEY")
@@ -109,7 +118,10 @@ def _build_cognito_auth() -> OAuthProxy | None:
     return auth
 
 
-mcp = FastMCP("gemini-websearch", auth=_build_cognito_auth())
+_oauth_storage: FernetEncryptionWrapper | None = None
+_cognito_auth = _build_cognito_auth()  # may set _oauth_storage via _build_storage
+
+mcp = FastMCP("gemini-websearch", auth=_cognito_auth)
 
 
 # ── Response formatting ──────────────────────────────────────────────────────
@@ -134,13 +146,13 @@ async def _sanitize_url(url: str) -> str:
     """
     parsed = httpx.URL(url)
     if parsed.host != "vertexaisearch.cloud.google.com" or not parsed.path.startswith(
-        "/grounding-api-redirect"
+        "/grounding-api-redirect/"
     ):
         return str(parsed)
     try:
         async with httpx.AsyncClient(follow_redirects=False, timeout=5) as client:
             resp = await client.head(url)
-        location = resp.headers.get("location", "")
+        location = resp.headers.get("location")
         if not location:
             return ""
         resolved = httpx.URL(location)
@@ -247,14 +259,29 @@ async def web_search(query: str) -> str:
 
 # ── Entrypoint ───────────────────────────────────────────────────────────────
 
+
+async def health(request):
+    """Health check endpoint. Pings the database when configured."""
+    if _oauth_storage is None:
+        return PlainTextResponse("ok")
+    try:
+        pg_store = _oauth_storage.key_value  # underlying PostgreSQLStore
+        await pg_store.setup()
+        await pg_store._pool.fetchval("SELECT 1")
+        return JSONResponse({"status": "ok", "db": "ok"})
+    except Exception:
+        log.exception("Health check: database unreachable")
+        return JSONResponse(
+            {"status": "degraded", "db": "unreachable"}, status_code=503
+        )
+
+
 if __name__ == "__main__":
-    from starlette.responses import PlainTextResponse
-    from starlette.routing import Route
     import uvicorn
 
     log.info("Starting Gemini Web Search MCP server (streamable-http)")
 
     app = mcp.http_app(transport="streamable-http", stateless_http=True)
-    app.routes.append(Route("/health", lambda _: PlainTextResponse("ok")))
+    app.routes.append(Route("/health", health))
 
     uvicorn.run(app, host=MCP_HOST, port=MCP_PORT)

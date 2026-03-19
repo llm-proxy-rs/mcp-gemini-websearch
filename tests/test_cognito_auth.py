@@ -18,6 +18,7 @@ _COGNITO_FULL_ENV = {
     "COGNITO_CLIENT_ID": "client-id",
     "COGNITO_CLIENT_SECRET": "secret",
     "COGNITO_DOMAIN": "test",
+    "COGNITO_SCOPES": "openid profile",
     "MCP_JWT_SIGNING_KEY": "test-signing-key-at-least-12-chars",
 }
 
@@ -83,6 +84,12 @@ def test_auth_requires_jwt_signing_key():
         _build_auth_missing("MCP_JWT_SIGNING_KEY")
 
 
+def test_auth_requires_cognito_scopes():
+    """Missing COGNITO_SCOPES should raise RuntimeError."""
+    with pytest.raises(RuntimeError, match="COGNITO_SCOPES"):
+        _build_auth_missing("COGNITO_SCOPES")
+
+
 def test_auth_configured_with_all_vars():
     """With all required vars set, should return an OAuthProxy instance."""
     result = _build_auth()
@@ -108,12 +115,28 @@ def test_build_storage_raises_without_signing_key():
             server._build_storage("")
 
 
+def test_build_storage_raises_without_encryption_salt():
+    """When DATABASE_URL is set but STORAGE_ENCRYPTION_SALT is missing, should raise."""
+    with patch.dict(
+        os.environ,
+        {"DATABASE_URL": "postgresql://localhost/test", "STORAGE_ENCRYPTION_SALT": ""},
+        clear=False,
+    ):
+        with pytest.raises(RuntimeError, match="STORAGE_ENCRYPTION_SALT"):
+            server._build_storage("a-valid-signing-key-for-testing-1234")
+
+
 @patch("server.PostgreSQLStore")
 def test_build_storage_returns_fernet_wrapper(mock_pg_store):
     """When DATABASE_URL and signing key are set, should return FernetEncryptionWrapper."""
     mock_pg_store.return_value = MagicMock()
     with patch.dict(
-        os.environ, {"DATABASE_URL": "postgresql://localhost/test"}, clear=False
+        os.environ,
+        {
+            "DATABASE_URL": "postgresql://localhost/test",
+            "STORAGE_ENCRYPTION_SALT": "test-salt",
+        },
+        clear=False,
     ):
         result = server._build_storage("a-valid-signing-key-for-testing-1234")
     assert isinstance(result, FernetEncryptionWrapper)
@@ -125,7 +148,11 @@ def test_build_storage_passes_database_url_to_pg_store(mock_pg_store):
     """PostgreSQLStore should be created with the DATABASE_URL."""
     mock_pg_store.return_value = MagicMock()
     db_url = "postgresql://user:pass@db.example.com:5432/mydb"
-    with patch.dict(os.environ, {"DATABASE_URL": db_url}, clear=False):
+    with patch.dict(
+        os.environ,
+        {"DATABASE_URL": db_url, "STORAGE_ENCRYPTION_SALT": "test-salt"},
+        clear=False,
+    ):
         server._build_storage("a-valid-signing-key-for-testing-1234")
     mock_pg_store.assert_called_once_with(url=db_url)
 
