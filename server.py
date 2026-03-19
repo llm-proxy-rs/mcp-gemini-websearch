@@ -19,6 +19,8 @@ from key_value.aio.stores.postgresql import PostgreSQLStore
 from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
 
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 MCP_HOST = os.getenv("MCP_HOST", "0.0.0.0")
