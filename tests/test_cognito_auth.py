@@ -25,7 +25,7 @@ _COGNITO_FULL_ENV = {
 
 def _build_auth(**env_overrides):
     """Call _build_cognito_auth with specific COGNITO env vars."""
-    env = {**_COGNITO_FULL_ENV, **env_overrides}
+    env = {**_COGNITO_FULL_ENV, "DATABASE_URL": "", **env_overrides}
     with patch.dict(os.environ, env, clear=False), patch.object(
         server, "MCP_BASE_URL", "https://example.com"
     ):
