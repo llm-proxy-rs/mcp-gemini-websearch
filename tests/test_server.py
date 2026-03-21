@@ -1,5 +1,6 @@
 """Tests for the Gemini WebSearch MCP server."""
 
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -242,6 +243,9 @@ class TestSanitizeUrl:
 
 
 class TestWebSearch:
+    def test_description_contains_todays_date(self):
+        assert date.today().isoformat() in web_search.__doc__
+
     @pytest.mark.asyncio
     async def test_calls_gemini_and_returns_text(self):
         mock_response = _make_response("search result")

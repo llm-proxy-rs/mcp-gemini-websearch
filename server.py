@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from datetime import date
 
 import httpx
 
@@ -244,7 +245,7 @@ async def web_search(query: str) -> str:
       - Web search is only available in the US
 
     IMPORTANT - Use the correct year in search queries:
-      - Today's date is 2025-12-06. You MUST use this year when searching for recent information, documentation, or current events.
+      - Today's date is DATE_PLACEHOLDER. You MUST use this year when searching for recent information, documentation, or current events.
       - Example: If today is 2025-07-15 and the user asks for "latest React docs", search for "React documentation 2025", NOT "React documentation 2024"
     """
     try:
@@ -257,6 +258,15 @@ async def web_search(query: str) -> str:
         raise RuntimeError(
             "Web search is temporarily unavailable. Please try again later."
         )
+
+
+def _update_web_search_description() -> None:
+    web_search.__doc__ = web_search.__doc__.replace(
+        "DATE_PLACEHOLDER", date.today().isoformat()
+    )
+
+
+_update_web_search_description()
 
 
 # ── Entrypoint ───────────────────────────────────────────────────────────────
