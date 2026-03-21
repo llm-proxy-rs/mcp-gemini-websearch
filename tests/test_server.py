@@ -8,7 +8,14 @@ import pytest
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from server import _format_response, _sanitize_url, health, mcp, web_search
+from server import (
+    _WEB_SEARCH_DESCRIPTION,
+    _format_response,
+    _sanitize_url,
+    health,
+    mcp,
+    web_search,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers to build mock Gemini response objects
@@ -244,7 +251,7 @@ class TestSanitizeUrl:
 
 class TestWebSearch:
     def test_description_contains_todays_date(self):
-        assert date.today().isoformat() in web_search.__doc__
+        assert date.today().isoformat() in _WEB_SEARCH_DESCRIPTION
 
     @pytest.mark.asyncio
     async def test_calls_gemini_and_returns_text(self):
