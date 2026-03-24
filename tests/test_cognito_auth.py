@@ -9,6 +9,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier, RSAKeyPair
 from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
 
 import server
+from fastmcp.server.auth.redirect_validation import matches_allowed_pattern
 
 # --- Helpers ---
 
@@ -266,3 +267,40 @@ async def test_required_scopes_satisfied(rsa_keys):
     )
     result = await verifier.verify_token(token)
     assert result is not None
+
+
+# --- RFC 8252 §7.3 loopback redirect URI tests (fastmcp#3589) ---
+
+
+class TestLoopbackRedirect:
+    """Verify loopback port flexibility per RFC 8252 §7.3."""
+
+    def test_localhost_no_port_matches_dynamic_port(self):
+        assert matches_allowed_pattern(
+            "http://localhost:51353/callback", "http://localhost/callback"
+        )
+
+    def test_127_0_0_1_no_port_matches_dynamic_port(self):
+        assert matches_allowed_pattern(
+            "http://127.0.0.1:3000/callback", "http://127.0.0.1/callback"
+        )
+
+    def test_loopback_wrong_path_rejected(self):
+        assert not matches_allowed_pattern(
+            "http://localhost:51353/other", "http://localhost/callback"
+        )
+
+    def test_loopback_wrong_scheme_rejected(self):
+        assert not matches_allowed_pattern(
+            "https://localhost:51353/callback", "http://localhost/callback"
+        )
+
+    def test_non_loopback_no_port_requires_default(self):
+        assert not matches_allowed_pattern(
+            "http://example.com:3000/callback", "http://example.com/callback"
+        )
+
+    def test_loopback_explicit_port_requires_exact_match(self):
+        assert not matches_allowed_pattern(
+            "http://localhost:3000/callback", "http://localhost:8080/callback"
+        )
