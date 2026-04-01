@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "asyncpg>=0.31.0",
-    "fastmcp @ git+https://github.com/PrefectHQ/fastmcp.git@main",
+    "fastmcp>=3.2.0",
     "google-genai>=1.68.0",
     "httpx>=0.28.1",
 ]
