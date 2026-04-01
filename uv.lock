@@ -343,8 +343,8 @@ wheels = [
 
 [[package]]
 name = "fastmcp"
-version = "3.1.1.dev128+39af2688"
-source = { git = "https://github.com/PrefectHQ/fastmcp.git?rev=main#39af26885f2d59719200d18c956f42aa288fc869" }
+version = "3.2.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "authlib" },
     { name = "cyclopts" },
@@ -367,6 +367,10 @@ dependencies = [
     { name = "uvicorn" },
     { name = "watchfiles" },
     { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d0/32/4f1b2cfd7b50db89114949f90158b1dcc2c92a1917b9f57c0ff24e47a2f4/fastmcp-3.2.0.tar.gz", hash = "sha256:d4830b8ffc3592d3d9c76dc0f398904cf41f04910e41a0de38cc1004e0903bef", size = 26318581, upload-time = "2026-03-30T20:25:37.692Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4f/67/684fa2d2de1e7504549d4ca457b4f854ccec3cd3be03bd86b33b599fbf58/fastmcp-3.2.0-py3-none-any.whl", hash = "sha256:e71aba3df16f86f546a4a9e513261d3233bcc92bef0dfa647bac3fa33623f681", size = 705550, upload-time = "2026-03-30T20:25:35.499Z" },
 ]
 
 [[package]]
@@ -649,7 +653,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.31.0" },
-    { name = "fastmcp", git = "https://github.com/PrefectHQ/fastmcp.git?rev=main" },
+    { name = "fastmcp", specifier = ">=3.2.0" },
     { name = "google-genai", specifier = ">=1.68.0" },
     { name = "httpx", specifier = ">=0.28.1" },
 ]
